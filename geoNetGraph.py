@@ -86,6 +86,92 @@ class geoNetGraph:
                             self.as2ip[asNum].append(newNet)
         return None
 
+    def initContentProviders(self):
+        asRouter = p2p_subnet = cp_Nodes = cp_NetDevs = cp_Interfaces = None
+
+        for subNet in self.as2ip[self.contentProvider]:
+            hostAS = self.ip2as[subNet[1].exploded]
+            if hostAS == self.contentProvider:
+                p2p_subnet = subNet.subnets(new_prefix=30).next()
+                printWithClock(
+                    "Content provider subnet: " + p2p_subnet.exploded)
+                break
+        assert p2p_subnet is not None
+
+        host_ip = p2p_subnet[1]
+
+        self.netGraph.node[self.contentProvider]['as_router'] = asRouter
+        self.netGraph.node[self.contentProvider]['ns_nets'] = [(
+            p2p_subnet, {
+                'nodes': cp_Nodes,
+                'devices': cp_NetDevs,
+                'interfaces': cp_Interfaces
+            }
+        )]
+        self.netGraph.node[self.contentProvider]['ip'] = host_ip
+        printWithClock("Content provider ip-address: " + host_ip.exploded)
+        return
+
+    def populateGeoNetGraph(self, maxHosts, percentCache,
+                            onlyPreselected=False):
+        listHosts = []
+        listASesWithHosts = []
+        if onlyPreselected:
+            hostsAvailable = sum(
+                [sum(self.netGraph.node[n]['subnetSizes'])
+                 for n in self.accessNodes
+                 if 'ns_nets' in self.netGraph.node[n]]
+            )
+        else:
+            hostsAvailable = sum(
+                [sum(self.netGraph.node[n]['subnetSizes'])
+                 for n in self.accessNodes]
+            )
+        for tmpASn in self.accessNodes:
+            possibleHostsInAS = sum(
+                self.netGraph.node[tmpASn]['subnetSizes'])
+            nHostsToPopulate = (float(maxHosts) / hostsAvailable) * \
+                               possibleHostsInAS
+            hostsPopulated = 0
+            tmpAS = self.netGraph.node[tmpASn]
+            as_subnet_nsNodes = None
+            as_subnet_nsNetDevs = None
+            as_subnet_nsIfs = None
+            channel = None
+            if 'ns_nets' in tmpAS or not onlyPreselected:
+                for net in self.as2ip[tmpASn]:
+                    subNetInfo = (
+                        net, {
+                            'nodes': as_subnet_nsNodes,
+                            'devices': as_subnet_nsNetDevs,
+                            'interfaces': as_subnet_nsIfs,
+                            'channel': channel
+                        }
+                    )
+                    if 'ns_nets' in tmpAS:
+                        tmpAS['ns_nets'].append(subNetInfo)
+                    else:
+                        tmpAS['ns_nets'] = [subNetInfo]
+                    for h in net.hosts():
+                        if hostsPopulated < nHostsToPopulate:
+                            listHosts.append(h)
+                            hostsPopulated += 1
+                        else:
+                            break
+                    if hostsPopulated >= nHostsToPopulate:
+                        break
+            if 'ns_nets' in tmpAS and len(tmpAS['ns_nets']) > 0:
+                listASesWithHosts.append(tmpASn)
+        staticCaches = round(float(len(listASesWithHosts) * percentCache) / 100)
+        printWithClock(
+            "Percent of ASes with static caches: " + str(percentCache))
+        import sim_globals as sg
+        sg.random.shuffle(listASesWithHosts)
+        for i in range(int(staticCaches)):
+            self.netGraph.node[listASesWithHosts[i]]['static_cache'] = True
+        return listHosts
+
+
     def cache_write(self, cache_folder):
         os.makedirs(cache_folder)
         pickle.dump(self.contentProvider,

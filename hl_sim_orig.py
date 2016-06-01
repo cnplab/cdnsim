@@ -40,122 +40,66 @@
 from __future__ import print_function
 
 import matplotlib.pyplot as plt
-from decorations import printWithClock, printInfo
+from decorations import printWithClock
 import multiprocessing as mp
 import Queue
 import treap
 
 import sim_globals as sg
 
-
 def eventQueueKeeper(inPipe, outQueue, commLock):
     eventQueue = treap.treap()
+    updated = False
     keepRunning = True
-    prevNextEv = None
-    printInfo("eventQueueKeeper is started")
+    print(">>\teventQueueKeeper is started")
 
     while keepRunning:
         if inPipe.poll():
+            #   withdraw prev event if not yet
+            if not outQueue.empty():
+                prevNextEv = outQueue.get()
+                eventQueue[prevNextEv] = prevNextEv
+            #   insert new event
             inc_ev, extra = inPipe.recv()
-            if outQueue.empty():
-                if eventQueue:
-                    prevNextEv = eventQueue.find_min()
-                    outQueue.put(prevNextEv)
-                    eventQueue.remove(prevNextEv)
-                else:
-                    prevNextEv = None
-            # add new event
             if extra is None:
-                if prevNextEv is None:
-                    outQueue.put(inc_ev)
-                    commLock.release()
-                    prevNextEv = inc_ev
-                    continue
-                elif prevNextEv < inc_ev:
-                    commLock.release()
-                    eventQueue[inc_ev] = inc_ev
-                    continue
-                else:
-                    outQueue.get()
-                    outQueue.put(inc_ev)
-                    commLock.release()
-                    eventQueue[prevNextEv] = prevNextEv
-                    prevNextEv = inc_ev
-                    continue
-            else: # perform some action on event
+                eventQueue[inc_ev] = inc_ev
+            elif type(extra) == tuple:
                 action, val = extra
                 if action == sg.ACTION_UPDATE:
-                    if prevNextEv is None:
-                        eventQueue.remove(inc_ev)
-                        inc_ev.time = val
-                        eventQueue[inc_ev] = inc_ev
-                        prevNextEv = eventQueue.find_min()
-                        outQueue.put(prevNextEv)
-                        commLock.release()
-                        eventQueue.remove(prevNextEv)
-                        continue
-                    elif prevNextEv == inc_ev:
-                        outQueue.get()
-                        inc_ev.time = val
-                        if prevNextEv < inc_ev:
-                            eventQueue[inc_ev] = inc_ev
-                            prevNextEv = eventQueue.find_min()
-                            outQueue.put(prevNextEv)
-                            commLock.release()
-                            eventQueue.remove(prevNextEv)
-                            continue
-                        else:
-                            outQueue.put(inc_ev)
-                            commLock.release()
-                            prevNextEv = inc_ev
-                            continue
-                    else:
-                        eventQueue.remove(inc_ev)
-                        inc_ev.time = val
-                        if prevNextEv < inc_ev:
-                            commLock.release()
-                            eventQueue[inc_ev] = inc_ev
-                            continue
-                        else:
-                            outQueue.get()
-                            outQueue.put(inc_ev)
-                            commLock.release()
-                            eventQueue[prevNextEv] = prevNextEv
-                            prevNextEv = inc_ev
-                            continue
+                    eventQueue.remove(inc_ev)
+                    inc_ev.time = val
+                    eventQueue[inc_ev] = inc_ev
                 elif action == sg.ACTION_DELETE:
-                    if prevNextEv == inc_ev:
-                        outQueue.get()
-                        if eventQueue:
-                            prevNextEv = eventQueue.find_min()
-                            outQueue.put(prevNextEv)
-                            commLock.release()
-                            eventQueue.remove(prevNextEv)
-                            continue
-                        else:
-                            prevNextEv = None
-                            commLock.release()
-                            continue
-                    else:
-                        commLock.release()
-                        eventQueue.remove(inc_ev)
-                        continue
+                    eventQueue.remove(inc_ev)
                 elif action == sg.ACTION_STOP:
                     if not eventQueue:
-                        commLock.release()
-                        printInfo("stop eventQueueKeeper")
+                        print(">>\tstop eventQueueKeeper")
                         keepRunning = False
                         break
-        if eventQueue and outQueue.empty():
-            prevNextEv = eventQueue.find_min()
-            outQueue.put(prevNextEv)
-            eventQueue.remove(prevNextEv)
-
-    printInfo("eventQueueKeeper finished successfully")
+                else:
+                    print(">>\tReceived:\t" + str(inc_ev))
+            updated = True
+        if eventQueue and (updated or outQueue.empty()):
+            newest_ev = eventQueue.find_min()
+            eventQueue.remove(newest_ev)
+            outQueue.put(newest_ev)
+        if updated:
+            commLock.release()
+            updated = False
+    print(">>\teventQueueKeeper finished successfully")
 
 
 class highLevelSimulation:
     def __init__(self):
+        self.mpManager = mp.Manager()
+        self.commQueue_in = self.mpManager.Queue(maxsize=1)
+        commPipe_chld, self.commPipe_out = mp.Pipe(False)
+        self.communicationLock = mp.Lock()
+        self.eventQueueProcess = mp.Process(
+            target=eventQueueKeeper,
+            args=(commPipe_chld, self.commQueue_in, self.communicationLock)
+        )
+        self.eventQueueProcess.start()
         self.lastEventTime = 0.0
         self.simulatorReady = False if sg.args.backnoise else True
         self.simulationDone = False
@@ -164,48 +108,13 @@ class highLevelSimulation:
         self.cacheStatistics_hw = []
         self.urStatistics_nActCons = []
         self.urStatistics_nReqPSec = []
-        if sg.args.parallel:
-            printInfo("DISCLAIMER: Parallel simulation is a test feature!")
-            #   calcFairThroughput
-            self.calcFT_pool = mp.Pool()
-            #   eventQueueKeeper
-            self.mpManager = mp.Manager()
-            self.commQueue_in = self.mpManager.Queue(maxsize=1)
-            commPipe_chld, self.commPipe_out = mp.Pipe(False)
-            self.communicationLock = mp.Lock()
-            self.eventQueueProcess = mp.Process(
-                target=eventQueueKeeper,
-                args=(commPipe_chld, self.commQueue_in, self.communicationLock)
-            )
-            self.eventQueueProcess.start()
-            self.step = self.step_parallel
-            self.eventPush = self.eventPush_parallel
-            self.eventUpdateTime = self.eventUpdateTime_parallel
-            self.deleteEvent = self.deleteEvent_parallel
-        else:
-            self.eventQueue = treap.treap()
-            self.step = self.step_sequential
-            self.eventPush = self.eventPush_sequential
-            self.eventUpdateTime = self.eventUpdateTime_sequential
-            self.deleteEvent = self.deleteEvent_sequential
         return
 
     def __del__(self):
-        if sg.args.parallel:
-            self.calcFT_pool.close()
-            self.calcFT_pool.join()
-            self.eventQueueProcess.terminate()
-            self.eventQueueProcess.join()
+        self.eventQueueProcess.terminate()
+        self.eventQueueProcess.join()
 
-    def step_sequential(self):
-        e = self.eventQueue.find_min()
-        self.eventQueue.remove(e)
-        self.lastEventTime = e.time
-        objRef = sg.event_obj_dict[e.objRef_id]
-        objRef.process(e)
-        return self.eventQueue
-
-    def step_parallel(self):
+    def step(self):
         self.communicationLock.acquire()
         try:
             e = self.commQueue_in.get(timeout=1)
@@ -222,36 +131,19 @@ class highLevelSimulation:
         objRef.process(e)
         return True
 
-    def eventPush_sequential(self, ev):
-        self.eventQueue[ev] = ev
-
-    def eventPush_parallel(self, e):
+    def eventPush(self, e):
         self.communicationLock.acquire()
         self.commPipe_out.send((e, None))
         return
 
-    def eventUpdateTime_sequential(self, e, newTime):
-        #   try to speedup: limit to microsecond precision
-        if e.time - newTime > 0.000001:
-            self.eventQueue.remove(e)
-            e.time = newTime
-            self.eventQueue[e] = e
+    def eventUpdateTime(self, e, newTime):
+        self.communicationLock.acquire()
+        self.commPipe_out.send((e, (sg.ACTION_UPDATE, newTime)))
+        #   keep the local version synced
+        e.time = newTime
         return
 
-    def eventUpdateTime_parallel(self, e, newTime):
-        #   try to speedup: limit to microsecond precision
-        if e.time - newTime > 0.000001:
-            self.communicationLock.acquire()
-            self.commPipe_out.send((e, (sg.ACTION_UPDATE, newTime)))
-            #   keep the local version synced
-            e.time = newTime
-        return
-
-    def deleteEvent_sequential(self, e):
-        self.eventQueue.remove(e)
-        return
-
-    def deleteEvent_parallel(self, e):
+    def deleteEvent(self, e):
         self.communicationLock.acquire()
         self.commPipe_out.send((e, (sg.ACTION_DELETE, None)))
         return

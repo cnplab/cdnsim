@@ -66,42 +66,47 @@ or visit https://pypi.python.org/pypi/treap
 
     usage: cdnsim.py [-h] [-trace file] [-links file] [-origin file] [-rank file]
                      [-geo string] [-nhosts number] [-active number]
-                     [-backnoise number] [-streaming {live,vod}] [-ondemandCache]
+                     [-backnoise number] [-streaming] [-ondemandCache]
                      [-percentCache number] [-hierarchical] [-cachesec number]
                      [-cacheinit number] [-cachethreshold number] [-interactive]
                      [-reqRate number] [-scenario file] [-endtime number]
-                     [-waitCacheBoot] [-siminfo text] [-figures] [-allfigures]
-
-    CDNSim in Python
+                     [-waitCacheBoot] [-unlimCoreLinkBandwidth] [-siminfo text]
+                     [-figures] [-allfigures] [-parallel]
+    
+    CDN-Sim in Python
     
     optional arguments:
-      -h, --help              show this help message and exit
+      -h, --help               show this help message and exit
     
     Input files:
-      -trace file             User behavior trace (default: usr_trace.dat)
-      -links file             IRL AS-to-AS links (default: as_links.dat)
-      -origin file            IRL origin prefixes (default: origin.dat)
-      -rank file              CAIDA AS rank data (default: caida.org.dat)
+      -trace file              User behavior trace (default: usr_trace.dat)
+      -links file              IRL AS-to-AS links (default: as_links.dat)
+      -origin file             IRL origin prefixes (default: origin.dat)
+      -rank file               CAIDA AS rank data (default: caida.org.dat)
     
     Simulation setup:
-      -geo string             Comma-separated list of countries (default: de)
-      -nhosts number          Maximal number of hosts (default: 1000000)
-      -active number          Simultaneously active streams (default: 100000)
-      -backnoise number       Simultaneous active background streams (default: 0)
-      -streaming {live,vod}   Streaming Live/Vod (default: live)
-      -ondemandCache          Create caches on demand (default: False)
-      -percentCache number    % of ASes with static cache (default: 0)
-      -hierarchical           Use hierarchical cache placement (default: False)
-      -cachesec number        # seconds of video to keep in cache (default: 10)
-      -cacheinit number       ondemand cache init time (default: 0.1)
-      -cachethreshold number  # streams to start a cache (default: 1)
-      -interactive            Interactively populate ASes (default: False)
-      -reqRate number         Request rate per min (0-auto) (default: 0)
-      -scenario file          Scenario file (format: time, rate/min) (default: )
-      -endtime number         Finalize simulation, no new requests (default: 3000)
-      -waitCacheBoot          Wait cache to boot or bypass it (default: False)
+      -geo string              Comma-separated list of countries (default: de)
+      -nhosts number           Maximal number of hosts (default: 1000000)
+      -active number           Simultaneously active streams (default: 100000)
+      -backnoise number        Simultaneous active background streams (default: 0)
+      -streaming               Live streaming (not VoD) (default: True)
+      -ondemandCache           Create caches on demand (default: False)
+      -percentCache number     % of ASes with static cache (default: 0)
+      -hierarchical            Use hierarchical cache placement (default: False)
+      -cachesec number         # seconds of video to keep in cache (default: 10)
+      -cacheinit number        ondemand cache init time (default: 0.1)
+      -cachethreshold number   # streams to start a cache (default: 1)
+      -interactive             Interactively populate ASes (default: False)
+      -reqRate number          Request rate per min (0-auto) (default: 0)
+      -scenario file           Scenario file (format: time, rate/min) (default: )
+      -endtime number          Finalize simulation, no new requests (default: 30)
+      -waitCacheBoot           Wait cache to boot or bypass it (default: True)
+      -unlimCoreLinkBandwidth  Set no limit to the core link bandwidth (default:
+                               False)
     
     Results:
-      -siminfo text           Name of the simulation (default: )
-      -figures                Figures with results (default: False)
-      -allfigures             Figures for all user streams (default: False)
+      -siminfo text            Name of the simulation (default: )
+      -figures                 Figures with results (default: False)
+      -allfigures              Figures for all user streams (default: False)
+      -parallel                Enable parallelism in simulation (default: False)
+

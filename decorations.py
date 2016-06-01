@@ -38,12 +38,20 @@
 """
 
 from __future__ import print_function
-import time
 import sys
 
+import sim_globals as sg
 
-def printWithClock(s, end='\n'):
-    print(str("%.3f" % time.clock()) + ":\t" + s, end=end)
+
+def printWithClock(s, pre='', end='\n'):
+    print(pre + str("{:10.2f}".format(sg.time.time() - sg.ts_sim_begin)) + ":\t" + s, end=end)
+    if end != '\n':
+        sys.stdout.flush()
+    return
+
+
+def printInfo(s, pre='', end='\n'):
+    print(pre + "      info:\t" + s, end=end)
     if end != '\n':
         sys.stdout.flush()
     return

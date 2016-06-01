@@ -42,8 +42,7 @@
 from __future__ import print_function
 from decorations import printWithClock
 import argparse
-import random
-random.seed(42)
+import cProfile
 import time
 import sys
 import os
@@ -82,13 +81,13 @@ def main(argv=None):
                             default=1000000,
                             help='Maximal number of hosts')
     simSetupGr.add_argument('-active', metavar='number',
-                            default=100000,
+                            default=100000, type=int,
                             help='Simultaneously active streams')
     simSetupGr.add_argument('-backnoise', metavar='number',
                             default=0,
                             help='Simultaneous active background streams')
-    simSetupGr.add_argument('-streaming', choices=['live', 'vod'],
-                            default='live', help='Streaming Live/Vod')
+    simSetupGr.add_argument('-streaming', action='store_true',
+                            default=True, help='Live streaming (not VoD)')
     simSetupGr.add_argument('-ondemandCache', action='store_true',
                             default=False,
                             help='Create caches on demand')
@@ -117,12 +116,14 @@ def main(argv=None):
                             default='',
                             help='Scenario file (format: time, rate/min)')
     simSetupGr.add_argument('-endtime', metavar='number', type=float,
-                            default=3000,
+                            default=30,
                             help='Finalize simulation, no new requests')
     simSetupGr.add_argument('-waitCacheBoot', action='store_true',
-                            default=False,
+                            default=True,
                             help='Wait cache to boot or bypass it')
-
+    simSetupGr.add_argument('-unlimCoreLinkBandwidth', action='store_true',
+                            default=False,
+                            help='Set no limit to the core link bandwidth')
     resultsGr = parser.add_argument_group('Results')
     resultsGr.add_argument('-siminfo', metavar='text',
                            default='',
@@ -133,6 +134,9 @@ def main(argv=None):
     resultsGr.add_argument('-allfigures', action='store_true',
                            default=False,
                            help='Figures for all user streams')
+    resultsGr.add_argument('-parallel', action='store_true',
+                           default=False,
+                           help='Enable parallelism in simulation')
 
     args = parser.parse_args(argv)
 
@@ -141,11 +145,11 @@ def main(argv=None):
         matplotlib.use('TkAgg')
     else:
         matplotlib.use('pdf')
-    import geoNetGraph
-    from netStreamingPrimitives import userRequests
-    import hl_sim
 
-    printWithClock("CDN Started on " + str(time.ctime()))
+    import sim_globals as sg
+    sg.init(args)
+
+    printWithClock("CDN-Sim started on " + str(time.ctime()))
 
     max_hosts = sys.maxint
     if args.nhosts != 'all':
@@ -159,149 +163,87 @@ def main(argv=None):
         printWithClock("Default geographic area: de")
 
     printWithClock("Building the geoNetGraph")
-    g = geoNetGraph.geoNetGraph(args.links, args.origin, args.rank, countries)
+    import geoNetGraph
+    sg.gnGraph = geoNetGraph.geoNetGraph(
+        args.links,
+        args.origin,
+        args.rank,
+        countries
+    )
 
     applyManualInputData = False
     if args.interactive:
-        g.iSetGeoNetGraph(selectHosts=True,
+        sg.gnGraph.iSetGeoNetGraph(selectHosts=True,
                           selectCaches=True,
                           selectProvider=True)
         applyManualInputData = True
 
-    initContentProviders(g)
+    sg.gnGraph.initContentProviders()
+
+    import hl_sim
+    simulator = hl_sim.highLevelSimulation()
+    sg.simRef = simulator
+
     printWithClock("Populate the geoNetGraph")
-    listOfHosts = populateGeoNetGraph(g, max_hosts, args.percentCache,
-                                      applyManualInputData)
+    import userRequests
+    sg.urRef = userRequests.userRequests(max_hosts, applyManualInputData)
 
     nASes = nCaches = 0
-    for tmpASNum, tmpAS in g.netGraph.nodes_iter(data=True):
-        if 'ns_nets' in tmpAS and g.isAccessNode(tmpAS['type']):
+    for tmpASNum, tmpAS in sg.gnGraph.netGraph.nodes_iter(data=True):
+        if 'ns_nets' in tmpAS and sg.gnGraph.isAccessNode(tmpAS['type']):
             nASes += 1
         if 'static_cache' in tmpAS:
             nCaches += 1
     printWithClock("Number of populated ASes: " + str(nASes))
     printWithClock("Number of ASes with static caches: " + str(nCaches))
 
-    simTimeStamp = '-'.join([str(k) for k in time.localtime()[0:6]])
-    simResDirName = 'sim_res' + args.siminfo + '(' + simTimeStamp + ')'
+    simTimeStamp = time.strftime('%Y.%m.%d-%H.%M.%S')
+    printWithClock("Starting simulation on: " + simTimeStamp)
+    start = time.time()
+    if int(args.backnoise) > 0:
+        e = sg.urRef.getNoiseEvent(simulator.lastEventTime)
+    else:
+        e = sg.urRef.getNextEvent(simulator.lastEventTime)
+    simulator.eventPush(e)
 
+    # main simulation loop
+    while simulator.step():
+        pass
+
+    stop = time.time()
+    print("")
+    printWithClock("Simulation completed on: " +
+                   time.strftime('%Y.%m.%d-%H.%M.%S'))
+    printWithClock("Time spent (s): " + str(stop-start))
+
+    for ASnum, ASnode in sg.gnGraph.netGraph.nodes_iter(data=True):
+        if 'caches' in ASnode:
+            simulator.cacheStatistics_hw.append((
+                ASnum,
+                ASnode['stats_maxThroughput'],
+                ASnode['stats_maxConnections'],
+                ASnode['stats_max_NumVMs']
+            ))
+
+    simResDirName = 'sim_res' + args.siminfo + '-' + simTimeStamp
     if os.path.exists('debug_out'):
         simResDirName = 'debug_out'
     else:
-        if not os.path.exists(simResDirName):
-            os.makedirs(simResDirName)
-        else:
-            print("Result directory exists! Cancel simulation")
-            exit(-1)
+        while os.path.exists(simResDirName):
+            import string
+            simResDirName += '_' + sg.random.choice(string.letters)
+            print("Result directory exists! Changing name to " + simResDirName)
+        os.makedirs(simResDirName)
 
-    printWithClock("Starting simulation on: " + str(time.ctime()))
-    start = time.time()
-    simulator = hl_sim.highLevelSimulation(args, simResDirName)
-    ur = userRequests(simulator, args.trace, g,
-                      listOfHosts, max_hosts, int(args.active))
-    simulator.urRef = ur
-    if int(args.backnoise) > 0:
-        simulator.eventPush(ur.getNoiseEvent(simulator.lastEventTime))
-    else:
-        simulator.eventPush(ur.getNextEvent(simulator.lastEventTime))
-
-    # main simulation loop
-    while simulator.eventQueue:
-        simulator.step()
-
-    stop = time.time()
-    printWithClock("\nSimulation completed on: " + str(time.ctime()))
-    printWithClock("Time spent (s): " + str(stop-start))
-
-    simulator.saveSimStatsToFile()
+    simulator.saveSimStatsToFile(simResDirName)
+    simulator.saveSimulationSetupToFile(simResDirName)
     if args.figures:
-        simulator.plotSimStats()
-        g.drawGeoNetGraph(simResDirName + '/fig_topology.pdf')
+        simulator.plotSimStats(simResDirName)
+        sg.gnGraph.drawGeoNetGraph(simResDirName + '/fig_topology.pdf')
 
     return 0
 
 
-def initContentProviders(gnGraph):
-    asRouter = p2p_subnet = cp_Nodes = cp_NetDevs = cp_Interfaces = None
-
-    for subNet in gnGraph.as2ip[gnGraph.contentProvider]:
-        hostAS = gnGraph.ip2as[subNet[1].exploded]
-        if hostAS == gnGraph.contentProvider:
-            p2p_subnet = subNet.subnets(new_prefix=30).next()
-            printWithClock("Content provider subnet: " + p2p_subnet.exploded)
-            break
-    assert p2p_subnet is not None
-
-    host_ip = p2p_subnet[1]
-
-    gnGraph.netGraph.node[gnGraph.contentProvider]['as_router'] = asRouter
-    gnGraph.netGraph.node[gnGraph.contentProvider]['ns_nets'] = [(
-        p2p_subnet, {
-            'nodes': cp_Nodes,
-            'devices': cp_NetDevs,
-            'interfaces': cp_Interfaces
-        }
-    )]
-    gnGraph.netGraph.node[gnGraph.contentProvider]['ip'] = host_ip
-    printWithClock("Content provider ip-address: " + host_ip.exploded)
-    return
-
-
-def populateGeoNetGraph(gnGraph, maxHosts, percentCache, onlyPreselected=False):
-    listHosts = []
-    listASesWithHosts = []
-    if onlyPreselected:
-        hostsAvailable = sum(
-            [sum(gnGraph.netGraph.node[n]['subnetSizes'])
-             for n in gnGraph.accessNodes
-             if 'ns_nets' in gnGraph.netGraph.node[n]]
-        )
-    else:
-        hostsAvailable = sum(
-            [sum(gnGraph.netGraph.node[n]['subnetSizes'])
-             for n in gnGraph.accessNodes]
-        )
-    for tmpASn in gnGraph.accessNodes:
-        possibleHostsInAS = sum(gnGraph.netGraph.node[tmpASn]['subnetSizes'])
-        nHostsToPopulate = (float(maxHosts) / hostsAvailable) *\
-            possibleHostsInAS
-        hostsPopulated = 0
-        tmpAS = gnGraph.netGraph.node[tmpASn]
-        as_subnet_nsNodes = None
-        as_subnet_nsNetDevs = None
-        as_subnet_nsIfs = None
-        channel = None
-        if 'ns_nets' in tmpAS or not onlyPreselected:
-            for net in gnGraph.as2ip[tmpASn]:
-                subNetInfo = (
-                    net, {
-                        'nodes': as_subnet_nsNodes,
-                        'devices': as_subnet_nsNetDevs,
-                        'interfaces': as_subnet_nsIfs,
-                        'channel': channel
-                    }
-                )
-                if 'ns_nets' in tmpAS:
-                    tmpAS['ns_nets'].append(subNetInfo)
-                else:
-                    tmpAS['ns_nets'] = [subNetInfo]
-                for h in net.hosts():
-                    if hostsPopulated < nHostsToPopulate:
-                        listHosts.append(h)
-                        hostsPopulated += 1
-                    else:
-                        break
-                if hostsPopulated >= nHostsToPopulate:
-                    break
-        if 'ns_nets' in tmpAS and len(tmpAS['ns_nets']) > 0:
-            listASesWithHosts.append(tmpASn)
-    staticCaches = round(float(len(listASesWithHosts) * percentCache) / 100)
-    printWithClock("Percent of ASes with static caches: " + str(percentCache))
-    random.shuffle(listASesWithHosts)
-    for i in range(int(staticCaches)):
-        gnGraph.netGraph.node[listASesWithHosts[i]]['static_cache'] = True
-    return listHosts
-
-
 if __name__ == '__main__':
+    #cProfile.run('main()', sort='tottime')
     main()

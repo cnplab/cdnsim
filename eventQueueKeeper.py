@@ -40,17 +40,6 @@ POSSIBILITY OF SUCH DAMAGES.
 from decorations import printInfo
 import treap
 
-# этот класс следит будет общим
-# между фунцией, которая станет процессом и мэйн
-# я буду вызывать enqueue() и dequeue(), которые по-сути будут
-# записывать в локальную копию нужное значение, затем в фоне
-# обновлять в ремоут потоке и по запросу (dequeue)
-# будут возвращать мне нужные данные
-
-# in the remote thread:
-#   while true()
-#       check
-
 
 class eventQueueKeeper(object):
     def __init__(self, commLock):
